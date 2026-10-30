@@ -11,6 +11,7 @@ internal sealed class TouchpadHotkey : ApplicationContext
     const int Id = 0x5421;
     readonly HotkeyWindow window;
     readonly NotifyIcon tray;
+    readonly Icon touchpadIcon;
     readonly System.Windows.Forms.Timer timer;
     bool waiting;
     int ticks;
@@ -20,6 +21,7 @@ internal sealed class TouchpadHotkey : ApplicationContext
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
     [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public UNION data; }
     [StructLayout(LayoutKind.Explicit)] struct UNION {
         [FieldOffset(0)] public KEYBDINPUT keyboard;
@@ -29,6 +31,36 @@ internal sealed class TouchpadHotkey : ApplicationContext
     [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int x,y; public uint data, flags, time; public UIntPtr extra; }
     static INPUT Key(ushort vk, bool up) { return new INPUT { type=1, data=new UNION { keyboard=new KEYBDINPUT { vk=vk, flags=up ? 2u : 0u } } }; }
     void Log(string text) { try { File.AppendAllText(log, DateTime.Now.ToString("s") + " " + text + Environment.NewLine); } catch {} }
+
+    // Draw at the target size so the tray symbol remains clear at small sizes.
+    public static Bitmap DrawTouchpadIcon(int size) {
+        var bitmap=new Bitmap(size,size,System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using(var graphics=Graphics.FromImage(bitmap)) {
+            graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            graphics.ScaleTransform(size/32f,size/32f);
+            using(var outline=new System.Drawing.Drawing2D.GraphicsPath())
+            using(var fill=new SolidBrush(Color.FromArgb(35,128,214)))
+            using(var border=new Pen(Color.FromArgb(225,243,255),1.8f)) {
+                outline.AddArc(2,5,8,8,180,90);
+                outline.AddArc(22,5,8,8,270,90);
+                outline.AddArc(22,20,8,8,0,90);
+                outline.AddArc(2,20,8,8,90,90);
+                outline.CloseFigure();
+                graphics.FillPath(fill,outline);
+                graphics.DrawPath(border,outline);
+                graphics.DrawLine(border,3,21,29,21);
+                graphics.DrawLine(border,16,21,16,27);
+            }
+        }
+        return bitmap;
+    }
+    static Icon CreateTouchpadIcon() {
+        using(var bitmap=DrawTouchpadIcon(32)) {
+            IntPtr handle=bitmap.GetHicon();
+            try { using(var borrowed=Icon.FromHandle(handle)) return (Icon)borrowed.Clone(); }
+            finally { DestroyIcon(handle); }
+        }
+    }
 
     sealed class HotkeyWindow : NativeWindow, IDisposable {
         public Action Pressed;
@@ -46,7 +78,8 @@ internal sealed class TouchpadHotkey : ApplicationContext
         var menu=new ContextMenuStrip();
         menu.Items.Add("Открыть настройки тачпада", null, delegate { System.Diagnostics.Process.Start("ms-settings:devices-touchpad"); });
         menu.Items.Add("Выход", null, delegate { ExitThread(); });
-        tray=new NotifyIcon { Icon=SystemIcons.Application, Text="Тачпад: Ctrl + Alt + Пробел", ContextMenuStrip=menu, Visible=true };
+        touchpadIcon=CreateTouchpadIcon();
+        tray=new NotifyIcon { Icon=touchpadIcon, Text="Тачпад: Ctrl + Alt + Пробел", ContextMenuStrip=menu, Visible=true };
         timer=new System.Windows.Forms.Timer { Interval=40 };
         window.Pressed=delegate { if(!waiting) { waiting=true; ticks=0; timer.Start(); } };
         timer.Tick+=delegate {
@@ -64,7 +97,7 @@ internal sealed class TouchpadHotkey : ApplicationContext
         Log("Started; Ctrl+Alt+Space registered");
     }
     protected override void ExitThreadCore() {
-        timer.Stop(); timer.Dispose(); UnregisterHotKey(window.Handle,Id); window.Dispose(); tray.Visible=false; tray.Dispose(); base.ExitThreadCore();
+        timer.Stop(); timer.Dispose(); UnregisterHotKey(window.Handle,Id); window.Dispose(); tray.Visible=false; tray.Dispose(); touchpadIcon.Dispose(); base.ExitThreadCore();
     }
     [STAThread] static void Main() {
         bool created;
@@ -76,3 +109,4 @@ internal sealed class TouchpadHotkey : ApplicationContext
         }
     }
 }
+
